@@ -1,0 +1,114 @@
+import numpy as np
+import pandas as pd
+from scipy.stats import t as t_dist
+
+def sliding_multiple_regression_lagged_time_stats(
+    df1, df2, df3,
+    x1_col, x2_col, y_col,
+    start_time, end_time,
+    window_len, lag1, lag2, step
+):
+    """
+    Same as your original function, but additionally computes:
+      - std errors of a, b1, b2
+      - t-statistics
+      - p-values
+    and returns them in the result dataframe.
+    """
+
+    # Ensure sorted by time
+    df1 = df1.sort_values('dt').reset_index(drop=True)
+    df2 = df2.sort_values('dt').reset_index(drop=True)
+    df3 = df3.sort_values('dt').reset_index(drop=True)
+
+    t1 = df1['dt'].to_numpy()
+    t2 = df2['dt'].to_numpy()
+    t3 = df3['dt'].to_numpy()
+
+    x1 = df1[x1_col].to_numpy()
+    x2 = df2[x2_col].to_numpy()
+    y  = df3[y_col].to_numpy()
+
+    results = []
+    t_curr = start_time
+
+    while t_curr + window_len <= end_time:
+
+        t_y_start = t_curr
+        t_y_end   = t_curr + window_len
+
+        # Lagged input windows
+        t_x1_start = t_curr - lag1
+        t_x1_end   = t_x1_start + window_len
+
+        t_x2_start = t_curr - lag2
+        t_x2_end   = t_x2_start + window_len
+
+        # Masks
+        mask_y  = (t3 >= t_y_start)  & (t3 < t_y_end)
+        mask_x1 = (t1 >= t_x1_start) & (t1 < t_x1_end)
+        mask_x2 = (t2 >= t_x2_start) & (t2 < t_x2_end)
+
+        y_w  = y[mask_y]
+        x1_w = x1[mask_x1]
+        x2_w = x2[mask_x2]
+
+        n = min(len(y_w), len(x1_w), len(x2_w))
+
+        if n > 5:
+            y_w  = y_w[:n]
+            x1_w = x1_w[:n]
+            x2_w = x2_w[:n]
+
+            X = np.column_stack([np.ones(n), x1_w, x2_w])
+            beta, residuals, rank, s = np.linalg.lstsq(X, y_w, rcond=None)
+            a, b1, b2 = beta
+
+            y_hat = X @ beta
+            ss_res = np.sum((y_w - y_hat)**2)
+            ss_tot = np.sum((y_w - y_w.mean())**2)
+            R2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+            # Statistics
+            k = X.shape[1]
+            dof = n - k
+
+            if dof > 0:
+                sigma2 = ss_res / dof
+                XtX = X.T @ X
+                try:
+                    XtX_inv = np.linalg.inv(XtX)
+                except np.linalg.LinAlgError:
+                    XtX_inv = np.linalg.pinv(XtX)
+
+                cov_beta = sigma2 * XtX_inv
+                se = np.sqrt(np.diag(cov_beta))
+                t_stats = beta / se
+                p_vals = 2 * (1 - t_dist.cdf(np.abs(t_stats), df=dof))
+
+                std_a, std_b1, std_b2 = se
+                t_a, t_b1, t_b2 = t_stats
+                p_a, p_b1, p_b2 = p_vals
+            else:
+                std_a = std_b1 = std_b2 = np.nan
+                t_a = t_b1 = t_b2 = np.nan
+                p_a = p_b1 = p_b2 = np.nan
+
+        else:
+            a = b1 = b2 = R2 = np.nan
+            std_a = std_b1 = std_b2 = np.nan
+            t_a = t_b1 = t_b2 = np.nan
+            p_a = p_b1 = p_b2 = np.nan
+
+        results.append({
+            't_start': t_curr,
+            'a': a, 'b1': b1, 'b2': b2,
+            'R2': R2, 'n': n,
+            'std_a': std_a, 'std_b1': std_b1, 'std_b2': std_b2,
+            't_a': t_a, 't_b1': t_b1, 't_b2': t_b2,
+            'p_a': p_a, 'p_b1': p_b1, 'p_b2': p_b2
+        })
+
+        t_curr += step
+
+    return pd.DataFrame(results).set_index('t_start')
