@@ -1,0 +1,60 @@
+Avg1 = pd.DataFrame()
+
+for i in range(47, len(start_time)):
+
+    filter1 = df1[(df1['dt'] > start_time[i]) & (df1['dt'] < end_time[i])]
+    filter2 = df2[(df2['dt'] > start_time[i]) & (df2['dt'] < end_time[i])]
+    filter3 = df3[(df3['dt'] > start_time[i]) & (df3['dt'] < end_time[i])]
+
+    fig, axes = plt.subplots(3, 1, figsize=(20, 15), sharex=True)
+
+    # --- 1) Voidage ---
+    axes[0].plot(filter1['dt'], filter1[vec1], label=vec1, color='green')
+    axes[0].legend()
+    axes[0].grid(True)
+
+    # --- 2) Normalized Injector ---
+    axes[1].plot(filter2['dt'], filter2[vec2], label='Normalized Injector', color='red')
+    axes[1].legend()
+    axes[1].grid(True)
+
+    # --- 3) DHP Response ---
+    axes[2].plot(filter3['dt'], filter3[vec3], label=vec3, color='blue')
+    axes[2].legend()
+    axes[2].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    print(i, start_time[i], end_time[i])
+
+    reg_lag = sliding_multiple_regression_lagged_time_stats(
+        df1=df1,
+        df2=df2,
+        df3=df3,
+        x1_col=vec1,
+        x2_col=vec2,
+        y_col=vec3,
+        start_time=start_time[i],
+        end_time=end_time[i],
+        window_len=1.0,
+        lag1=0.0,
+        lag2=0.1,
+        step=0.1
+    )
+
+    # Mean of time index (t_start)
+    idx_values = pd.to_numeric(reg_lag.index.values)
+    mean_index = idx_values.mean()
+
+    # Means of all regression outputs
+    mean_vals = reg_lag.mean()
+
+    # Build summary row
+    mean_row = pd.DataFrame([{
+        "t_start_mean": mean_index,
+        **mean_vals.to_dict()
+    }])
+
+    # Append to Avg1
+    Avg1 = pd.concat([Avg1, mean_row], ignore_index=True)
