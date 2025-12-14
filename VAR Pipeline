@@ -1,0 +1,143 @@
+def run_var_pipeline(
+    df: pd.DataFrame,
+    train_ratio: float = 0.8,
+    maxlags: int = 8,
+    ic: str = "aic",
+    forecast_steps: int | None = None,
+    plot: bool = True,
+):
+    """
+    Run a full VAR pipeline on a multivariate time series.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Time series data (each column is a variable, index is time).
+    train_ratio : float, default 0.8
+        Fraction of observations used for training.
+    maxlags : int, default 8
+        Maximum lag order to consider when selecting lag length.
+    ic : {"aic", "bic", "fpe", "hqic"}, default "aic"
+        Information criterion to select lag order.
+    forecast_steps : int or None, default None
+        Number of steps to forecast. If None, use len(test).
+    plot : bool, default True
+        If True, plot IRFs, FEVD, and actual vs forecast.
+
+    Returns
+    -------
+    results : dict
+        Dictionary with:
+            - "model": VAR model instance
+            - "var_result": fitted VARResults
+            - "train": training DataFrame
+            - "test": test DataFrame
+            - "forecast_df": forecast DataFrame
+            - "selected_lag": selected lag order (int)
+    """
+    # Safety checks
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError("df must be a pandas DataFrame")
+
+    if df.isnull().any().any():
+        raise ValueError("df contains NaNs. Please handle missing values before using this function.")
+
+    n_obs = len(df)
+    if n_obs < maxlags + 5:
+        raise ValueError("Not enough observations relative to maxlags.")
+
+    # 1. Train / test split
+    train_size = int(n_obs * train_ratio)
+    train = df.iloc[:train_size].copy()
+    test = df.iloc[train_size:].copy()
+
+    if forecast_steps is None:
+        forecast_steps = len(test)
+    if forecast_steps <= 0:
+        raise ValueError("forecast_steps must be positive or test set must be non-empty.")
+
+    # 2. Select lag order
+    model = VAR(train)
+    lag_results = model.select_order(maxlags=maxlags)
+    selected_lag = getattr(lag_results, ic)
+    print("Lag order selection:")
+    print(lag_results.summary())
+    print(f"\nSelected lag order (by {ic.upper()}): {selected_lag}")
+
+    # 3. Fit VAR(p)
+    var_result = model.fit(maxlags=selected_lag)
+    print("\nVAR Model Summary:")
+    print(var_result.summary())
+
+    # 4. Basic diagnostics
+    print("\nPortmanteau test for autocorrelation (Ljung-Box type):")
+    print(var_result.test_whiteness(nlags=50))
+
+    print("\nRoots of the VAR process (should be < 1 in modulus for stability):")
+    print(var_result.roots)
+
+    # 5. IRF and FEVD
+    irf = var_result.irf(10)   # 10-step horizon
+    fevd = var_result.fevd(10)
+
+    if plot:
+        # IRF
+        irf.plot(orth=False)
+        plt.suptitle("Impulse Response Functions", y=1.02)
+        plt.tight_layout()
+        plt.show()
+
+        # FEVD
+        fevd.plot()
+        plt.suptitle("Forecast Error Variance Decomposition", y=1.02)
+        plt.tight_layout()
+        plt.show()
+
+    # 6. Forecasting
+    # Use last 'selected_lag' observations from train as starting values
+    forecast_input = train.values[-selected_lag:]
+    forecast = var_result.forecast(y=forecast_input, steps=forecast_steps)
+
+    forecast_index = (
+        test.index[:forecast_steps]
+        if len(test) >= forecast_steps
+        else pd.RangeIndex(start=0, stop=forecast_steps)
+    )
+
+    forecast_df = pd.DataFrame(
+        forecast,
+        index=forecast_index,
+        columns=train.columns
+    )
+
+    print("\nForecast (head):")
+    print(forecast_df.head())
+
+    # Plot actual vs forecast
+    if plot and len(test) > 0:
+        fig, axes = plt.subplots(nrows=len(df.columns), ncols=1, figsize=(10, 4 * len(df.columns)), sharex=True)
+
+        if len(df.columns) == 1:
+            axes = [axes]  # ensure iterable
+
+        for i, col in enumerate(df.columns):
+            axes[i].plot(train.index, train[col], label=f"Train - {col}")
+            axes[i].plot(test.index, test[col], label=f"Test - {col}")
+            axes[i].plot(forecast_df.index, forecast_df[col], linestyle="--", label=f"Forecast - {col}")
+            axes[i].set_title(col)
+            axes[i].legend(loc="upper left")
+
+        plt.tight_layout()
+        plt.show()
+
+    # Package results
+    results = {
+        "model": model,
+        "var_result": var_result,
+        "train": train,
+        "test": test,
+        "forecast_df": forecast_df,
+        "selected_lag": selected_lag,
+    }
+
+    return results
