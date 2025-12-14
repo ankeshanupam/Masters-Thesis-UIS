@@ -1,0 +1,56 @@
+def align_all_on_common_dt_numeric(df_map, dt_col='dt', method='linear'):
+    """
+    df_map: dict like {'B1H_DHP1': B1H_DHP1, 'B1H_ORAT': B1H_ORAT, ...}
+    - dt_col is numeric (no datetime conversion).
+    - Each dataframe must have a dt column + exactly one value column.
+    - Duplicate dt values are aggregated by mean.
+    Returns:
+        DataFrame with common dt and one column per entry in df_map.
+    """
+    # 1) collect all dt values
+    dt_list = []
+    for name, df in df_map.items():
+        if dt_col not in df.columns:
+            raise ValueError(f"{name} has no '{dt_col}' column.")
+        dt_list.append(df[[dt_col]])
+
+    # 2) build common dt = union of all timestamps
+    common_dt = (
+        pd.concat(dt_list)[dt_col]
+        .drop_duplicates()
+        .sort_values()
+    )
+
+    # 3) start result with common dt
+    result = pd.DataFrame({dt_col: common_dt})
+
+    # 4) per dataframe: remove duplicate dt, reindex, interpolate
+    for name, df in df_map.items():
+
+        # identify the value column (everything except dt)
+        value_cols = [c for c in df.columns if c != dt_col]
+        if len(value_cols) != 1:
+            raise ValueError(f"{name} has {len(value_cols)} value columns; expected 1.")
+        value_col = value_cols[0]
+
+        # collapse duplicate dt by mean
+        df_unique = (
+            df.groupby(dt_col, as_index=True)[value_col]
+              .mean()
+              .to_frame()
+              .sort_index()
+        )
+
+        # align to common dt
+        tmp = df_unique.reindex(common_dt)
+
+        # numeric interpolation on dt
+        tmp[value_col] = tmp[value_col].interpolate(method=method)
+
+        # fill edges (start/end) using forward/backward fill
+        tmp[value_col] = tmp[value_col].ffill().bfill()
+
+        # add column to result under the dataframe name
+        result[name] = tmp[value_col].values
+
+    return result
